@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { Plus, Users, BarChart3, Calendar, User, Home, TrendingUp, PieChart } from 'lucide-react';
 import { 
   createHousehold as createHouseholdDB,
@@ -9,7 +9,8 @@ import {
   subscribeToExpenses,
   subscribeToHousehold
 } from '../lib/firestore';
-import { testFirebaseConnection } from '../lib/test-firebase';
+import { CURRENCIES, getCurrency, formatNumberWithCommas, parseNumberFromFormatted, isValidAmount, detectUserCurrency } from '../lib/currency';
+import { formatCurrency } from '../lib/currency';
 
 const BudgetTracker = () => {
   // State management
@@ -200,33 +201,32 @@ const BudgetTracker = () => {
     }
   };
 
-  // Add expense (now using Firebase)
-  const addExpense = async (amount, description, category, date, user) => {
-    if (!currentHousehold) return;
-    
-    try {
-      setLoading(true);
-      const expenseData = {
-        amount: parseFloat(amount),
-        description: description.trim(),
-        category,
-        date,
-        user,
-        householdId: currentHousehold.id
-      };
+// Add expense (now using Firebase with currency)
+const addExpense = async (amount, description, category, date, user, currency = 'USD') => {
+  if (!currentHousehold) return;
+  
+  try {
+    setLoading(true);
+    const expenseData = {
+      amount: parseFloat(amount),
+      description: description.trim(),
+      category,
+      date,
+      user,
+      currency, // Add this line
+      householdId: currentHousehold.id
+    };
 
-      await addExpenseDB(currentHousehold.id, expenseData);
-      setShowAddExpense(false);
-      
-      // The real-time listener will automatically update the expenses list
-      
-    } catch (error) {
-      console.error('Error adding expense:', error);
-      alert('Error adding expense. Please try again.');
-    } finally {
-      setLoading(false);
-    }
-  };
+    await addExpenseDB(currentHousehold.id, expenseData);
+    setShowAddExpense(false);
+    
+  } catch (error) {
+    console.error('Error adding expense:', error);
+    alert('Error adding expense. Please try again.');
+  } finally {
+    setLoading(false);
+  }
+};
 
   // Test Firebase connection
   const handleTestFirebase = async () => {
@@ -320,405 +320,625 @@ const BudgetTracker = () => {
   };
 
   // Components
-  const SetupScreen = () => {
-    const [localName, setLocalName] = useState(userName);
-    
-    return (
-      <div className="p-6 max-w-md mx-auto">
-        <div className="text-center mb-8">
-          <h1 className="text-2xl font-bold text-gray-800 mb-2">Budget Tracker</h1>
-          <p className="text-gray-600">Track expenses with your household</p>
-        </div>
 
-        <div className="space-y-4 mb-6">
-          <input
-            type="text"
-            placeholder="Enter your name"
-            value={localName}
-            onChange={(e) => {
-              setLocalName(e.target.value);
-              setUserName(e.target.value);
-            }}
-            className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-          />
-        </div>
+// Clean SetupScreen Component - replace the existing one in your pages/index.js
 
-        <div className="space-y-3">
-          <button
-            onClick={() => setShowCreateHousehold(true)}
-            disabled={loading}
-            className="w-full bg-blue-500 text-white p-3 rounded-lg font-medium hover:bg-blue-600 transition-colors disabled:opacity-50"
-          >
-            {loading ? 'Loading...' : 'Create New Household'}
-          </button>
-          
-          <button
-            onClick={() => setShowJoinHousehold(true)}
-            disabled={loading}
-            className="w-full bg-gray-500 text-white p-3 rounded-lg font-medium hover:bg-gray-600 transition-colors disabled:opacity-50"
-          >
-            {loading ? 'Loading...' : 'Join Household'}
-          </button>
-          
-          <button
-            onClick={handleTestFirebase}
-            className="w-full bg-green-500 text-white p-3 rounded-lg font-medium hover:bg-green-600 transition-colors"
-          >
-            Test Firebase Connection
-          </button>
-        </div>
-
-        {showCreateHousehold && (
-          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4">
-            <div className="bg-white rounded-lg p-6 w-full max-w-sm">
-              <h2 className="text-lg font-bold mb-4">Create Household</h2>
-              <input
-                type="text"
-                placeholder="Enter household name"
-                className="w-full p-3 border border-gray-300 rounded-lg mb-4"
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && e.target.value.trim() && !loading) {
-                    createHousehold(e.target.value);
-                  }
-                }}
-                autoFocus
-              />
-              <div className="flex space-x-2">
-                <button
-                  onClick={() => setShowCreateHousehold(false)}
-                  disabled={loading}
-                  className="flex-1 bg-gray-300 text-gray-700 p-2 rounded-lg disabled:opacity-50"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={(e) => {
-                    const input = e.target.parentElement.parentElement.querySelector('input');
-                    if (input.value.trim() && !loading) {
-                      createHousehold(input.value);
-                    }
-                  }}
-                  disabled={loading}
-                  className="flex-1 bg-blue-500 text-white p-2 rounded-lg disabled:opacity-50"
-                >
-                  {loading ? 'Creating...' : 'Create'}
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {showJoinHousehold && (
-          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4">
-            <div className="bg-white rounded-lg p-6 w-full max-w-sm">
-              <h2 className="text-lg font-bold mb-4">Join Household</h2>
-              <input
-                type="text"
-                placeholder="Enter 6-digit invite code"
-                maxLength="6"
-                className="w-full p-3 border border-gray-300 rounded-lg mb-4 text-center text-lg font-mono"
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && e.target.value.trim().length === 6 && !loading) {
-                    joinHousehold(e.target.value);
-                  }
-                }}
-                autoFocus
-              />
-              <div className="flex space-x-2">
-                <button
-                  onClick={() => setShowJoinHousehold(false)}
-                  disabled={loading}
-                  className="flex-1 bg-gray-300 text-gray-700 p-2 rounded-lg disabled:opacity-50"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={(e) => {
-                    const input = e.target.parentElement.parentElement.querySelector('input');
-                    if (input.value.trim().length === 6 && !loading) {
-                      joinHousehold(input.value);
-                    }
-                  }}
-                  disabled={loading}
-                  className="flex-1 bg-blue-500 text-white p-2 rounded-lg disabled:opacity-50"
-                >
-                  {loading ? 'Joining...' : 'Join'}
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
+const SetupScreen = () => {
+  // Use a ref to avoid re-renders affecting the input
+  const nameInputRef = useRef(null);
+  const [localName, setLocalName] = useState(userName);
+  
+  // Only update userName when user stops interacting, not on every keystroke
+  const updateUserName = useCallback((value) => {
+    setUserName(value);
+  }, []);
+  
+  const handleNameChange = useCallback((e) => {
+    const value = e.target.value;
+    setLocalName(value);
+    // Don't update userName immediately to prevent re-renders
+  }, []);
+  
+  // Update userName when user moves to buttons or form submission
+  const handleNameBlur = useCallback(() => {
+    updateUserName(localName);
+  }, [localName, updateUserName]);
+  
+  const handleCreateHousehold = useCallback(() => {
+    updateUserName(localName); // Ensure userName is updated
+    setShowCreateHousehold(true);
+  }, [localName, updateUserName]);
+  
+  const handleJoinHousehold = useCallback(() => {
+    updateUserName(localName); // Ensure userName is updated
+    setShowJoinHousehold(true);
+  }, [localName, updateUserName]);
+  
+  return (
+    <div className="p-6 max-w-md mx-auto">
+      <div className="text-center mb-8">
+        <h1 className="text-2xl font-bold text-gray-800 mb-2">Budget Tracker</h1>
+        <p className="text-gray-600">Track expenses with your household</p>
       </div>
-    );
-  };
 
-  const ExpenseForm = () => {
-    const [amount, setAmount] = useState('');
-    const [description, setDescription] = useState('');
-    const [category, setCategory] = useState('');
-    const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
+      <div className="space-y-4 mb-6">
+        <input
+          ref={nameInputRef}
+          type="text"
+          placeholder="Enter your name"
+          value={localName}
+          onChange={handleNameChange}
+          onBlur={handleNameBlur}
+          className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+          autoComplete="name"
+        />
+      </div>
 
-    useEffect(() => {
-      if (description) {
-        const suggested = suggestCategory(description);
-        setCategory(suggested);
-      }
-    }, [description]);
+      <div className="space-y-3">
+        <button
+          onClick={handleCreateHousehold}
+          disabled={loading}
+          className="w-full bg-blue-500 text-white p-3 rounded-lg font-medium hover:bg-blue-600 transition-colors disabled:opacity-50"
+        >
+          {loading ? 'Loading...' : 'Create New Household'}
+        </button>
+        
+        <button
+          onClick={handleJoinHousehold}
+          disabled={loading}
+          className="w-full bg-gray-500 text-white p-3 rounded-lg font-medium hover:bg-gray-600 transition-colors disabled:opacity-50"
+        >
+          {loading ? 'Loading...' : 'Join Household'}
+        </button>
+      </div>
 
-    const handleSubmit = () => {
-      if (!amount || !description || !category || loading) return;
-      addExpense(amount, description, category, date, userName);
-      setAmount('');
-      setDescription('');
-      setCategory('');
-      setDate(new Date().toISOString().split('T')[0]);
-    };
-
-    return (
-      <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4">
-        <div className="bg-white rounded-lg p-6 w-full max-w-sm">
-          <h2 className="text-lg font-bold mb-4">Add Expense</h2>
-          <div className="space-y-4">
-            <input
-              type="number"
-              step="0.01"
-              placeholder="Amount"
-              value={amount}
-              onChange={(e) => setAmount(e.target.value)}
-              className="w-full p-3 border border-gray-300 rounded-lg"
-              required
-            />
+      {/* Create Household Modal */}
+      {showCreateHousehold && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-lg p-6 w-full max-w-sm">
+            <h2 className="text-lg font-bold mb-4">Create Household</h2>
             <input
               type="text"
-              placeholder="What was it for?"
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              className="w-full p-3 border border-gray-300 rounded-lg"
-              required
-            />
-            <select
-              value={category}
-              onChange={(e) => setCategory(e.target.value)}
-              className="w-full p-3 border border-gray-300 rounded-lg"
-              required
-            >
-              <option value="">Select category</option>
-              {defaultCategories.map(cat => (
-                <option key={cat} value={cat}>{cat}</option>
-              ))}
-            </select>
-            <input
-              type="date"
-              value={date}
-              onChange={(e) => setDate(e.target.value)}
-              className="w-full p-3 border border-gray-300 rounded-lg"
+              placeholder="Enter household name"
+              className="w-full p-3 border border-gray-300 rounded-lg mb-4"
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && e.target.value.trim() && !loading) {
+                  createHousehold(e.target.value);
+                }
+              }}
+              autoFocus
+              autoComplete="off"
             />
             <div className="flex space-x-2">
               <button
-                onClick={() => setShowAddExpense(false)}
+                onClick={() => setShowCreateHousehold(false)}
                 disabled={loading}
                 className="flex-1 bg-gray-300 text-gray-700 p-2 rounded-lg disabled:opacity-50"
               >
                 Cancel
               </button>
               <button
-                onClick={handleSubmit}
+                onClick={(e) => {
+                  const input = e.target.parentElement.parentElement.querySelector('input');
+                  if (input.value.trim() && !loading) {
+                    createHousehold(input.value);
+                  }
+                }}
                 disabled={loading}
                 className="flex-1 bg-blue-500 text-white p-2 rounded-lg disabled:opacity-50"
               >
-                {loading ? 'Adding...' : 'Add'}
+                {loading ? 'Creating...' : 'Create'}
               </button>
             </div>
           </div>
         </div>
-      </div>
-    );
-  };
+      )}
 
-  const ExpensesView = () => {
-    const dailyData = getAggregatedData('daily');
-    const monthlyData = getAggregatedData('monthly');
-    const [viewMode, setViewMode] = useState('daily');
-    
-    const data = viewMode === 'daily' ? dailyData : monthlyData;
-    const maxAmount = Math.max(...data.map(d => d.total), 1);
-
-    const formatDate = (dateStr) => {
-      const date = new Date(dateStr);
-      if (viewMode === 'daily') {
-        return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-      } else {
-        return date.toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
-      }
-    };
-
-    return (
-      <div className="p-4">
-        <div className="flex justify-between items-center mb-4">
-          <h2 className="text-xl font-bold">
-            {currentHousehold?.name}
-          </h2>
-          <div className="text-sm text-gray-600">
-            Code: {currentHousehold?.inviteCode}
-          </div>
-        </div>
-
-        <div className="flex space-x-2 mb-4">
-          <button
-            onClick={() => setViewMode('daily')}
-            className={`px-3 py-1 rounded-full text-sm ${
-              viewMode === 'daily' ? 'bg-blue-500 text-white' : 'bg-gray-200'
-            }`}
-          >
-            Daily
-          </button>
-          <button
-            onClick={() => setViewMode('monthly')}
-            className={`px-3 py-1 rounded-full text-sm ${
-              viewMode === 'monthly' ? 'bg-blue-500 text-white' : 'bg-gray-200'
-            }`}
-          >
-            Monthly
-          </button>
-        </div>
-
-        <div className="bg-white rounded-lg p-4 mb-4 shadow-sm">
-          <div className="flex items-end space-x-1 h-32 overflow-x-auto">
-            {data.map((item, index) => {
-              const height = (item.total / maxAmount) * 100;
-              return (
-                <div
-                  key={item.date}
-                  className="flex flex-col items-center min-w-0 flex-1"
-                  onClick={() => setSelectedDate(selectedDate === item.date ? null : item.date)}
-                >
-                  <div
-                    className={`w-full bg-blue-500 hover:bg-blue-600 cursor-pointer rounded-t transition-colors ${
-                      selectedDate === item.date ? 'bg-blue-700' : ''
-                    }`}
-                    style={{ height: `${Math.max(height, 4)}%` }}
-                  />
-                  <div className="text-xs mt-1 text-center text-gray-600 transform -rotate-45 origin-center">
-                    {formatDate(item.date)}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-
-        {selectedDate && (
-          <div className="bg-white rounded-lg p-4 mb-4 shadow-sm">
-            <h3 className="font-bold mb-2">
-              {viewMode === 'daily' ? 'Day' : 'Month'} Details - {formatDate(selectedDate)}
-            </h3>
-            {data
-              .find(d => d.date === selectedDate)
-              ?.expenses.map(expense => (
-                <div key={expense.id} className="flex justify-between items-center py-2 border-b last:border-b-0">
-                  <div>
-                    <div className="font-medium">{expense.description}</div>
-                    <div className="text-sm text-gray-600">{expense.category} • {expense.user}</div>
-                  </div>
-                  <div className="font-bold">${expense.amount.toFixed(2)}</div>
-                </div>
-              ))}
-          </div>
-        )}
-
-        <div className="bg-white rounded-lg p-4 shadow-sm">
-          <h3 className="font-bold mb-2">Recent Expenses</h3>
-          {householdExpenses.slice(0, 10).map(expense => (
-            <div key={expense.id} className="flex justify-between items-center py-2 border-b last:border-b-0">
-              <div>
-                <div className="font-medium">{expense.description}</div>
-                <div className="text-sm text-gray-600">
-                  {expense.category} • {expense.user} • {new Date(expense.date).toLocaleDateString()}
-                </div>
-              </div>
-              <div className="font-bold">${expense.amount.toFixed(2)}</div>
+      {/* Join Household Modal */}
+      {showJoinHousehold && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-lg p-6 w-full max-w-sm">
+            <h2 className="text-lg font-bold mb-4">Join Household</h2>
+            <input
+              type="text"
+              placeholder="Enter 6-digit invite code"
+              maxLength="6"
+              className="w-full p-3 border border-gray-300 rounded-lg mb-4 text-center text-lg font-mono"
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && e.target.value.trim().length === 6 && !loading) {
+                  joinHousehold(e.target.value);
+                }
+              }}
+              autoFocus
+              autoComplete="off"
+            />
+            <div className="flex space-x-2">
+              <button
+                onClick={() => setShowJoinHousehold(false)}
+                disabled={loading}
+                className="flex-1 bg-gray-300 text-gray-700 p-2 rounded-lg disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={(e) => {
+                  const input = e.target.parentElement.parentElement.querySelector('input');
+                  if (input.value.trim().length === 6 && !loading) {
+                    joinHousehold(input.target.value);
+                  }
+                }}
+                disabled={loading}
+                className="flex-1 bg-blue-500 text-white p-2 rounded-lg disabled:opacity-50"
+              >
+                {loading ? 'Joining...' : 'Join'}
+              </button>
             </div>
-          ))}
+          </div>
         </div>
-      </div>
-    );
+      )}
+    </div>
+  );
+};
+
+  // Enhanced ExpenseForm Component - replace the existing one in your pages/index.js
+// Add this import at the top of your file:
+// import { CURRENCIES, getCurrency, formatNumberWithCommas, parseNumberFromFormatted, isValidAmount, detectUserCurrency } from '../lib/currency';
+
+const ExpenseForm = () => {
+  const [amount, setAmount] = useState('');
+  const [displayAmount, setDisplayAmount] = useState('');
+  const [description, setDescription] = useState('');
+  const [category, setCategory] = useState('');
+  const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
+  const [currency, setCurrency] = useState(() => {
+    // Get currency from localStorage or detect user's currency
+    return localStorage.getItem('preferredCurrency') || detectUserCurrency();
+  });
+
+  useEffect(() => {
+    if (description) {
+      const suggested = suggestCategory(description);
+      setCategory(suggested);
+    }
+  }, [description]);
+
+  // Save preferred currency
+  useEffect(() => {
+    localStorage.setItem('preferredCurrency', currency);
+  }, [currency]);
+
+  const handleAmountChange = (e) => {
+    const value = e.target.value;
+    
+    // Remove any non-digit, non-decimal characters except commas
+    const cleanValue = value.replace(/[^\d.,]/g, '');
+    
+    // Parse the clean value
+    const parsedValue = parseNumberFromFormatted(cleanValue);
+    
+    // Validate it's a proper number format
+    if (parsedValue === '' || /^\d*\.?\d*$/.test(parsedValue)) {
+      setAmount(parsedValue);
+      setDisplayAmount(formatNumberWithCommas(parsedValue));
+    }
   };
 
-  const InsightsView = () => {
-    const insights = getInsights();
+  const handleSubmit = () => {
+    if (!amount || !description || !category || loading || !isValidAmount(amount)) return;
+    
+    // Pass the clean amount (without commas) to the database
+    addExpense(parseFloat(amount), description, category, date, userName, currency);
+    
+    // Reset form
+    setAmount('');
+    setDisplayAmount('');
+    setDescription('');
+    setCategory('');
+    setDate(new Date().toISOString().split('T')[0]);
+  };
 
-    return (
-      <div className="p-4">
-        <div className="flex justify-between items-center mb-4">
-          <h2 className="text-xl font-bold">Insights</h2>
+  const selectedCurrency = getCurrency(currency);
+
+  return (
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4">
+      <div className="bg-white rounded-lg p-6 w-full max-w-sm">
+        <h2 className="text-lg font-bold mb-4">Add Expense</h2>
+        <div className="space-y-4">
+          {/* Currency Selector */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Currency
+            </label>
+            <select
+              value={currency}
+              onChange={(e) => setCurrency(e.target.value)}
+              className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+            >
+              {CURRENCIES.map(curr => (
+                <option key={curr.code} value={curr.code}>
+                  {curr.symbol} {curr.name} ({curr.code})
+                </option>
+              ))}
+            </select>
+          </div>
+          
+          {/* Amount Input with Currency Symbol */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Amount
+            </label>
+            <div className="relative">
+              <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                <span className="text-gray-500 text-lg">
+                  {selectedCurrency.symbol}
+                </span>
+              </div>
+              <input
+                type="text"
+                placeholder="0.00"
+                value={displayAmount}
+                onChange={handleAmountChange}
+                className="w-full pl-8 pr-3 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-lg"
+                required
+                inputMode="decimal"
+                autoComplete="off"
+              />
+            </div>
+            {displayAmount && (
+              <div className="mt-1 text-sm text-gray-600">
+                {selectedCurrency.symbol}{formatNumberWithCommas(amount)}
+              </div>
+            )}
+          </div>
+          
+          <input
+            type="text"
+            placeholder="What was it for?"
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+            className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+            required
+            autoComplete="off"
+          />
+          
+          <select
+            value={category}
+            onChange={(e) => setCategory(e.target.value)}
+            className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+            required
+          >
+            <option value="">Select category</option>
+            {defaultCategories.map(cat => (
+              <option key={cat} value={cat}>{cat}</option>
+            ))}
+          </select>
+          
+          <input
+            type="date"
+            value={date}
+            onChange={(e) => setDate(e.target.value)}
+            className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+          />
+          
           <div className="flex space-x-2">
             <button
-              onClick={() => setInsightsPeriod('weekly')}
-              className={`px-3 py-1 rounded-full text-sm ${
-                insightsPeriod === 'weekly' ? 'bg-blue-500 text-white' : 'bg-gray-200'
-              }`}
+              onClick={() => setShowAddExpense(false)}
+              disabled={loading}
+              className="flex-1 bg-gray-300 text-gray-700 p-2 rounded-lg disabled:opacity-50"
             >
-              Weekly
+              Cancel
             </button>
             <button
-              onClick={() => setInsightsPeriod('monthly')}
-              className={`px-3 py-1 rounded-full text-sm ${
-                insightsPeriod === 'monthly' ? 'bg-blue-500 text-white' : 'bg-gray-200'
-              }`}
+              onClick={handleSubmit}
+              disabled={loading || !isValidAmount(amount)}
+              className="flex-1 bg-blue-500 text-white p-2 rounded-lg disabled:opacity-50"
             >
-              Monthly
+              {loading ? 'Adding...' : 'Add'}
             </button>
           </div>
         </div>
+      </div>
+    </div>
+  );
+};
 
-        <div className="bg-white rounded-lg p-4 mb-4 shadow-sm">
-          <h3 className="font-bold mb-2">
-            Total {insights.period === 'weekly' ? 'This Week' : 'This Month'}
-          </h3>
-          <div className="text-2xl font-bold text-blue-600">
-            ${insights.total.toFixed(2)}
-          </div>
+  // Updated ExpensesView and InsightsView components - replace in your pages/index.js
+// Make sure to import: import { formatCurrency } from '../lib/currency';
+
+const ExpensesView = () => {
+  const dailyData = getAggregatedData('daily');
+  const monthlyData = getAggregatedData('monthly');
+  const [viewMode, setViewMode] = useState('daily');
+  
+  const data = viewMode === 'daily' ? dailyData : monthlyData;
+  const maxAmount = Math.max(...data.map(d => d.total), 1);
+
+  const formatDate = (dateStr) => {
+    const date = new Date(dateStr);
+    if (viewMode === 'daily') {
+      return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    } else {
+      return date.toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
+    }
+  };
+
+  // Get the primary currency used in household
+  const getPrimaryCurrency = () => {
+    if (!householdExpenses.length) return 'USD';
+    
+    // Count currency usage
+    const currencyCount = {};
+    householdExpenses.forEach(expense => {
+      const curr = expense.currency || 'USD';
+      currencyCount[curr] = (currencyCount[curr] || 0) + 1;
+    });
+    
+    // Return most used currency
+    return Object.entries(currencyCount)
+      .sort((a, b) => b[1] - a[1])[0][0];
+  };
+
+  const primaryCurrency = getPrimaryCurrency();
+
+  return (
+    <div className="p-4">
+      <div className="flex justify-between items-center mb-4">
+        <h2 className="text-xl font-bold">
+          {currentHousehold?.name}
+        </h2>
+        <div className="text-sm text-gray-600">
+          Code: {currentHousehold?.inviteCode}
         </div>
+      </div>
 
-        <div className="bg-white rounded-lg p-4 mb-4 shadow-sm">
-          <h3 className="font-bold mb-3">Expenses by User</h3>
-          {insights.byUser.map(item => (
-            <div key={item.user} className="flex justify-between items-center py-2">
-              <div className="flex items-center">
-                <User className="w-4 h-4 mr-2 text-gray-500" />
-                <span>{item.user}</span>
-              </div>
-              <div className="font-bold">${item.amount.toFixed(2)}</div>
-            </div>
-          ))}
-        </div>
+      <div className="flex space-x-2 mb-4">
+        <button
+          onClick={() => setViewMode('daily')}
+          className={`px-3 py-1 rounded-full text-sm ${
+            viewMode === 'daily' ? 'bg-blue-500 text-white' : 'bg-gray-200'
+          }`}
+        >
+          Daily
+        </button>
+        <button
+          onClick={() => setViewMode('monthly')}
+          className={`px-3 py-1 rounded-full text-sm ${
+            viewMode === 'monthly' ? 'bg-blue-500 text-white' : 'bg-gray-200'
+          }`}
+        >
+          Monthly
+        </button>
+      </div>
 
-        <div className="bg-white rounded-lg p-4 shadow-sm">
-          <h3 className="font-bold mb-3">Expenses by Category</h3>
-          {insights.byCategory.map(item => {
-            const percentage = insights.total > 0 ? (item.amount / insights.total) * 100 : 0;
+      <div className="bg-white rounded-lg p-4 mb-4 shadow-sm">
+        <div className="flex items-end space-x-1 h-32 overflow-x-auto">
+          {data.map((item, index) => {
+            const height = (item.total / maxAmount) * 100;
             return (
-              <div key={item.category} className="mb-3">
-                <div className="flex justify-between items-center mb-1">
-                  <span>{item.category}</span>
-                  <span className="font-bold">${item.amount.toFixed(2)}</span>
-                </div>
-                <div className="w-full bg-gray-200 rounded-full h-2">
-                  <div
-                    className="bg-blue-500 h-2 rounded-full transition-all duration-300"
-                    style={{ width: `${percentage}%` }}
-                  />
-                </div>
-                <div className="text-xs text-gray-600 mt-1">
-                  {percentage.toFixed(1)}%
+              <div
+                key={item.date}
+                className="flex flex-col items-center min-w-0 flex-1"
+                onClick={() => setSelectedDate(selectedDate === item.date ? null : item.date)}
+              >
+                <div
+                  className={`w-full bg-blue-500 hover:bg-blue-600 cursor-pointer rounded-t transition-colors ${
+                    selectedDate === item.date ? 'bg-blue-700' : ''
+                  }`}
+                  style={{ height: `${Math.max(height, 4)}%` }}
+                />
+                <div className="text-xs mt-1 text-center text-gray-600 transform -rotate-45 origin-center">
+                  {formatDate(item.date)}
                 </div>
               </div>
             );
           })}
         </div>
       </div>
-    );
+
+      {selectedDate && (
+        <div className="bg-white rounded-lg p-4 mb-4 shadow-sm">
+          <h3 className="font-bold mb-2">
+            {viewMode === 'daily' ? 'Day' : 'Month'} Details - {formatDate(selectedDate)}
+          </h3>
+          {data
+            .find(d => d.date === selectedDate)
+            ?.expenses.map(expense => (
+              <div key={expense.id} className="flex justify-between items-center py-2 border-b last:border-b-0">
+                <div>
+                  <div className="font-medium">{expense.description}</div>
+                  <div className="text-sm text-gray-600">{expense.category} • {expense.user}</div>
+                </div>
+                <div className="font-bold">
+                  {formatCurrency(expense.amount, expense.currency || 'USD')}
+                </div>
+              </div>
+            ))}
+        </div>
+      )}
+
+      <div className="bg-white rounded-lg p-4 shadow-sm">
+        <h3 className="font-bold mb-2">Recent Expenses</h3>
+        {householdExpenses.slice(0, 10).map(expense => (
+          <div key={expense.id} className="flex justify-between items-center py-2 border-b last:border-b-0">
+            <div>
+              <div className="font-medium">{expense.description}</div>
+              <div className="text-sm text-gray-600">
+                {expense.category} • {expense.user} • {new Date(expense.date).toLocaleDateString()}
+              </div>
+            </div>
+            <div className="font-bold">
+              {formatCurrency(expense.amount, expense.currency || 'USD')}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+};
+
+const InsightsView = () => {
+  const insights = getInsights();
+
+  // Group insights by currency
+  const getInsightsByCurrency = () => {
+    if (!householdExpenses.length) return {};
+
+    const now = new Date();
+    const periodStart = new Date(now);
+    
+    if (insightsPeriod === 'weekly') {
+      const dayOfWeek = now.getDay() === 0 ? 7 : now.getDay();
+      periodStart.setDate(now.getDate() - dayOfWeek + 1);
+    } else {
+      periodStart.setDate(1);
+    }
+    periodStart.setHours(0, 0, 0, 0);
+
+    const periodExpenses = householdExpenses.filter(e => new Date(e.date) >= periodStart);
+    
+    // Group by currency
+    const byCurrency = {};
+    periodExpenses.forEach(expense => {
+      const currency = expense.currency || 'USD';
+      if (!byCurrency[currency]) {
+        byCurrency[currency] = {
+          total: 0,
+          byUser: {},
+          byCategory: {},
+          expenses: []
+        };
+      }
+      
+      byCurrency[currency].total += expense.amount;
+      byCurrency[currency].expenses.push(expense);
+      
+      // By user
+      if (!byCurrency[currency].byUser[expense.user]) {
+        byCurrency[currency].byUser[expense.user] = 0;
+      }
+      byCurrency[currency].byUser[expense.user] += expense.amount;
+      
+      // By category
+      if (!byCurrency[currency].byCategory[expense.category]) {
+        byCurrency[currency].byCategory[expense.category] = 0;
+      }
+      byCurrency[currency].byCategory[expense.category] += expense.amount;
+    });
+
+    // Convert to arrays
+    Object.keys(byCurrency).forEach(currency => {
+      byCurrency[currency].byUser = Object.entries(byCurrency[currency].byUser)
+        .map(([user, amount]) => ({ user, amount }))
+        .sort((a, b) => b.amount - a.amount);
+      
+      byCurrency[currency].byCategory = Object.entries(byCurrency[currency].byCategory)
+        .map(([category, amount]) => ({ category, amount }))
+        .sort((a, b) => b.amount - a.amount);
+    });
+
+    return byCurrency;
   };
+
+  const insightsByCurrency = getInsightsByCurrency();
+  const currencies = Object.keys(insightsByCurrency).sort();
+
+  return (
+    <div className="p-4">
+      <div className="flex justify-between items-center mb-4">
+        <h2 className="text-xl font-bold">Insights</h2>
+        <div className="flex space-x-2">
+          <button
+            onClick={() => setInsightsPeriod('weekly')}
+            className={`px-3 py-1 rounded-full text-sm ${
+              insightsPeriod === 'weekly' ? 'bg-blue-500 text-white' : 'bg-gray-200'
+            }`}
+          >
+            Weekly
+          </button>
+          <button
+            onClick={() => setInsightsPeriod('monthly')}
+            className={`px-3 py-1 rounded-full text-sm ${
+              insightsPeriod === 'monthly' ? 'bg-blue-500 text-white' : 'bg-gray-200'
+            }`}
+          >
+            Monthly
+          </button>
+        </div>
+      </div>
+
+      {currencies.length === 0 ? (
+        <div className="bg-white rounded-lg p-4 shadow-sm text-center text-gray-500">
+          No expenses in this period
+        </div>
+      ) : (
+        currencies.map(currency => {
+          const currencyData = insightsByCurrency[currency];
+          
+          return (
+            <div key={currency} className="mb-6">
+              <h3 className="text-lg font-bold mb-3 text-gray-700">
+                {currency} Expenses
+              </h3>
+              
+              {/* Total for this currency */}
+              <div className="bg-white rounded-lg p-4 mb-4 shadow-sm">
+                <h4 className="font-bold mb-2">
+                  Total {insightsPeriod === 'weekly' ? 'This Week' : 'This Month'}
+                </h4>
+                <div className="text-2xl font-bold text-blue-600">
+                  {formatCurrency(currencyData.total, currency)}
+                </div>
+              </div>
+
+              {/* By User */}
+              <div className="bg-white rounded-lg p-4 mb-4 shadow-sm">
+                <h4 className="font-bold mb-3">Expenses by User</h4>
+                {currencyData.byUser.map(item => (
+                  <div key={item.user} className="flex justify-between items-center py-2">
+                    <div className="flex items-center">
+                      <User className="w-4 h-4 mr-2 text-gray-500" />
+                      <span>{item.user}</span>
+                    </div>
+                    <div className="font-bold">
+                      {formatCurrency(item.amount, currency)}
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {/* By Category */}
+              <div className="bg-white rounded-lg p-4 mb-4 shadow-sm">
+                <h4 className="font-bold mb-3">Expenses by Category</h4>
+                {currencyData.byCategory.map(item => {
+                  const percentage = currencyData.total > 0 ? (item.amount / currencyData.total) * 100 : 0;
+                  return (
+                    <div key={item.category} className="mb-3">
+                      <div className="flex justify-between items-center mb-1">
+                        <span>{item.category}</span>
+                        <span className="font-bold">
+                          {formatCurrency(item.amount, currency)}
+                        </span>
+                      </div>
+                      <div className="w-full bg-gray-200 rounded-full h-2">
+                        <div
+                          className="bg-blue-500 h-2 rounded-full transition-all duration-300"
+                          style={{ width: `${percentage}%` }}
+                        />
+                      </div>
+                      <div className="text-xs text-gray-600 mt-1">
+                        {percentage.toFixed(1)}%
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })
+      )}
+    </div>
+  );
+};
 
   // Show loading screen while initializing
   if (loading && !currentHousehold) {
