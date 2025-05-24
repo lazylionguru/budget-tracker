@@ -1,10 +1,19 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { Plus, Users, BarChart3, Calendar, User, Home, TrendingUp, PieChart } from 'lucide-react';
+import { 
+  createHousehold as createHouseholdDB,
+  getHouseholdByInviteCode,
+  updateHousehold,
+  getHouseholdById,
+  addExpense as addExpenseDB,
+  subscribeToExpenses,
+  subscribeToHousehold
+} from '../lib/firestore';
+import { testFirebaseConnection } from '../lib/test-firebase';
 
 const BudgetTracker = () => {
   // State management
   const [currentView, setCurrentView] = useState('expenses');
-  const [households, setHouseholds] = useState([]);
   const [currentHousehold, setCurrentHousehold] = useState(null);
   const [expenses, setExpenses] = useState([]);
   const [userName, setUserName] = useState('');
@@ -13,6 +22,7 @@ const BudgetTracker = () => {
   const [showCreateHousehold, setShowCreateHousehold] = useState(false);
   const [selectedDate, setSelectedDate] = useState(null);
   const [insightsPeriod, setInsightsPeriod] = useState('monthly');
+  const [loading, setLoading] = useState(false);
 
   // Pre-defined categories with learning capability
   const defaultCategories = [
@@ -20,26 +30,50 @@ const BudgetTracker = () => {
     'Entertainment', 'Shopping', 'Healthcare', 'Cigarettes', 'Other'
   ];
 
-  // Load data from localStorage on mount
+  // Load data from localStorage on mount (for user preferences)
   useEffect(() => {
-    const savedHouseholds = JSON.parse(localStorage.getItem('households') || '[]');
-    const savedExpenses = JSON.parse(localStorage.getItem('expenses') || '[]');
     const savedUserName = localStorage.getItem('userName') || '';
-    const savedCurrentHousehold = localStorage.getItem('currentHousehold');
+    const savedCurrentHouseholdId = localStorage.getItem('currentHousehold');
     
-    setHouseholds(savedHouseholds);
-    setExpenses(savedExpenses);
     setUserName(savedUserName);
     
-    if (savedCurrentHousehold) {
-      const household = savedHouseholds.find(h => h.id === savedCurrentHousehold);
-      if (household) setCurrentHousehold(household);
+    // Load household from Firebase if we have an ID
+    if (savedCurrentHouseholdId) {
+      loadHousehold(savedCurrentHouseholdId);
     }
   }, []);
 
-  // Save data to localStorage
-  const saveToStorage = (key, data) => {
-    localStorage.setItem(key, JSON.stringify(data));
+  // Load household from Firebase
+  const loadHousehold = async (householdId) => {
+    try {
+      setLoading(true);
+      const household = await getHouseholdById(householdId);
+      if (household) {
+        setCurrentHousehold(household);
+        
+        // Set up real-time listeners
+        const unsubscribeExpenses = subscribeToExpenses(householdId, (expensesList) => {
+          setExpenses(expensesList);
+        });
+        
+        const unsubscribeHousehold = subscribeToHousehold(householdId, (householdData) => {
+          if (householdData) {
+            setCurrentHousehold(householdData);
+          }
+        });
+        
+        // Store unsubscribe functions for cleanup
+        return () => {
+          unsubscribeExpenses();
+          unsubscribeHousehold();
+        };
+      }
+    } catch (error) {
+      console.error('Error loading household:', error);
+      alert('Error loading household. Please try again.');
+    } finally {
+      setLoading(false);
+    }
   };
 
   // Generate 6-digit invite code
@@ -48,12 +82,10 @@ const BudgetTracker = () => {
   };
 
   // Smart category suggestion based on description
-  const suggestCategory = (description, householdId) => {
-    const householdExpenses = expenses.filter(e => e.householdId === householdId);
-    const patterns = {};
-    
+  const suggestCategory = (description) => {
     // Build patterns from existing expenses
-    householdExpenses.forEach(expense => {
+    const patterns = {};
+    expenses.forEach(expense => {
       const words = expense.description.toLowerCase().split(' ');
       words.forEach(word => {
         if (word.length > 2) {
@@ -93,83 +125,128 @@ const BudgetTracker = () => {
     return 'Other';
   };
 
-  // Create household
-  const createHousehold = (name) => {
+  // Create household (now using Firebase)
+  const createHousehold = async (name) => {
     if (!userName.trim()) {
       alert('Please enter your name first');
       return;
     }
 
-    const newHousehold = {
-      id: Date.now().toString(),
-      name: name.trim(),
-      inviteCode: generateInviteCode(),
-      members: [userName.trim()],
-      createdBy: userName.trim(),
-      createdAt: new Date().toISOString()
-    };
+    try {
+      setLoading(true);
+      const householdData = {
+        name: name.trim(),
+        inviteCode: generateInviteCode(),
+        members: [userName.trim()],
+        createdBy: userName.trim(),
+      };
 
-    const updatedHouseholds = [...households, newHousehold];
-    setHouseholds(updatedHouseholds);
-    setCurrentHousehold(newHousehold);
-    saveToStorage('households', updatedHouseholds);
-    localStorage.setItem('currentHousehold', newHousehold.id);
-    localStorage.setItem('userName', userName.trim());
-    setShowCreateHousehold(false);
+      const newHousehold = await createHouseholdDB(householdData);
+      setCurrentHousehold(newHousehold);
+      
+      // Save to localStorage for persistence
+      localStorage.setItem('currentHousehold', newHousehold.id);
+      localStorage.setItem('userName', userName.trim());
+      
+      setShowCreateHousehold(false);
+      
+      // Set up real-time listeners for the new household
+      loadHousehold(newHousehold.id);
+      
+    } catch (error) {
+      console.error('Error creating household:', error);
+      alert('Error creating household. Please try again.');
+    } finally {
+      setLoading(false);
+    }
   };
 
-  // Join household
-  const joinHousehold = (inviteCode) => {
+  // Join household (now using Firebase)
+  const joinHousehold = async (inviteCode) => {
     if (!userName.trim()) {
       alert('Please enter your name first');
       return;
     }
 
-    const household = households.find(h => h.inviteCode === inviteCode.trim());
-    if (!household) {
-      alert('Invalid invite code');
-      return;
-    }
+    try {
+      setLoading(true);
+      const household = await getHouseholdByInviteCode(inviteCode.trim());
+      
+      if (!household) {
+        alert('Invalid invite code');
+        return;
+      }
 
-    if (!household.members.includes(userName.trim())) {
-      household.members.push(userName.trim());
-      const updatedHouseholds = households.map(h => h.id === household.id ? household : h);
-      setHouseholds(updatedHouseholds);
-      saveToStorage('households', updatedHouseholds);
-    }
+      // Add user to household if not already a member
+      if (!household.members.includes(userName.trim())) {
+        const updatedMembers = [...household.members, userName.trim()];
+        await updateHousehold(household.id, { members: updatedMembers });
+        household.members = updatedMembers;
+      }
 
-    setCurrentHousehold(household);
-    localStorage.setItem('currentHousehold', household.id);
-    localStorage.setItem('userName', userName.trim());
-    setShowJoinHousehold(false);
+      setCurrentHousehold(household);
+      localStorage.setItem('currentHousehold', household.id);
+      localStorage.setItem('userName', userName.trim());
+      setShowJoinHousehold(false);
+      
+      // Set up real-time listeners
+      loadHousehold(household.id);
+      
+    } catch (error) {
+      console.error('Error joining household:', error);
+      alert('Error joining household. Please try again.');
+    } finally {
+      setLoading(false);
+    }
   };
 
-  // Add expense
-  const addExpense = (amount, description, category, date, user) => {
-    const newExpense = {
-      id: Date.now().toString(),
-      householdId: currentHousehold.id,
-      amount: parseFloat(amount),
-      description: description.trim(),
-      category,
-      date,
-      user,
-      createdAt: new Date().toISOString()
-    };
+  // Add expense (now using Firebase)
+  const addExpense = async (amount, description, category, date, user) => {
+    if (!currentHousehold) return;
+    
+    try {
+      setLoading(true);
+      const expenseData = {
+        amount: parseFloat(amount),
+        description: description.trim(),
+        category,
+        date,
+        user,
+        householdId: currentHousehold.id
+      };
 
-    const updatedExpenses = [...expenses, newExpense];
-    setExpenses(updatedExpenses);
-    saveToStorage('expenses', updatedExpenses);
-    setShowAddExpense(false);
+      await addExpenseDB(currentHousehold.id, expenseData);
+      setShowAddExpense(false);
+      
+      // The real-time listener will automatically update the expenses list
+      
+    } catch (error) {
+      console.error('Error adding expense:', error);
+      alert('Error adding expense. Please try again.');
+    } finally {
+      setLoading(false);
+    }
   };
 
-  // Get expenses for current household
+  // Test Firebase connection
+  const handleTestFirebase = async () => {
+    try {
+      const isConnected = await testFirebaseConnection();
+      if (isConnected) {
+        alert('✅ Firebase connected successfully!');
+      } else {
+        alert('❌ Firebase connection failed. Check console for details.');
+      }
+    } catch (error) {
+      console.error('Test error:', error);
+      alert('❌ Error testing Firebase connection: ' + error.message);
+    }
+  };
+
+  // Get expenses for current household (now from state, updated by real-time listener)
   const householdExpenses = useMemo(() => {
-    if (!currentHousehold) return [];
-    return expenses
-      .filter(e => e.householdId === currentHousehold.id)
-      .sort((a, b) => new Date(b.date) - new Date(a.date));
-  }, [expenses, currentHousehold]);
+    return expenses.sort((a, b) => new Date(b.date) - new Date(a.date));
+  }, [expenses]);
 
   // Get daily/monthly aggregated data
   const getAggregatedData = (period = 'daily') => {
@@ -269,16 +346,25 @@ const BudgetTracker = () => {
         <div className="space-y-3">
           <button
             onClick={() => setShowCreateHousehold(true)}
-            className="w-full bg-blue-500 text-white p-3 rounded-lg font-medium hover:bg-blue-600 transition-colors"
+            disabled={loading}
+            className="w-full bg-blue-500 text-white p-3 rounded-lg font-medium hover:bg-blue-600 transition-colors disabled:opacity-50"
           >
-            Create New Household
+            {loading ? 'Loading...' : 'Create New Household'}
           </button>
           
           <button
             onClick={() => setShowJoinHousehold(true)}
-            className="w-full bg-gray-500 text-white p-3 rounded-lg font-medium hover:bg-gray-600 transition-colors"
+            disabled={loading}
+            className="w-full bg-gray-500 text-white p-3 rounded-lg font-medium hover:bg-gray-600 transition-colors disabled:opacity-50"
           >
-            Join Household
+            {loading ? 'Loading...' : 'Join Household'}
+          </button>
+          
+          <button
+            onClick={handleTestFirebase}
+            className="w-full bg-green-500 text-white p-3 rounded-lg font-medium hover:bg-green-600 transition-colors"
+          >
+            Test Firebase Connection
           </button>
         </div>
 
@@ -291,7 +377,7 @@ const BudgetTracker = () => {
                 placeholder="Enter household name"
                 className="w-full p-3 border border-gray-300 rounded-lg mb-4"
                 onKeyDown={(e) => {
-                  if (e.key === 'Enter' && e.target.value.trim()) {
+                  if (e.key === 'Enter' && e.target.value.trim() && !loading) {
                     createHousehold(e.target.value);
                   }
                 }}
@@ -300,20 +386,22 @@ const BudgetTracker = () => {
               <div className="flex space-x-2">
                 <button
                   onClick={() => setShowCreateHousehold(false)}
-                  className="flex-1 bg-gray-300 text-gray-700 p-2 rounded-lg"
+                  disabled={loading}
+                  className="flex-1 bg-gray-300 text-gray-700 p-2 rounded-lg disabled:opacity-50"
                 >
                   Cancel
                 </button>
                 <button
                   onClick={(e) => {
                     const input = e.target.parentElement.parentElement.querySelector('input');
-                    if (input.value.trim()) {
+                    if (input.value.trim() && !loading) {
                       createHousehold(input.value);
                     }
                   }}
-                  className="flex-1 bg-blue-500 text-white p-2 rounded-lg"
+                  disabled={loading}
+                  className="flex-1 bg-blue-500 text-white p-2 rounded-lg disabled:opacity-50"
                 >
-                  Create
+                  {loading ? 'Creating...' : 'Create'}
                 </button>
               </div>
             </div>
@@ -330,7 +418,7 @@ const BudgetTracker = () => {
                 maxLength="6"
                 className="w-full p-3 border border-gray-300 rounded-lg mb-4 text-center text-lg font-mono"
                 onKeyDown={(e) => {
-                  if (e.key === 'Enter' && e.target.value.trim().length === 6) {
+                  if (e.key === 'Enter' && e.target.value.trim().length === 6 && !loading) {
                     joinHousehold(e.target.value);
                   }
                 }}
@@ -339,20 +427,22 @@ const BudgetTracker = () => {
               <div className="flex space-x-2">
                 <button
                   onClick={() => setShowJoinHousehold(false)}
-                  className="flex-1 bg-gray-300 text-gray-700 p-2 rounded-lg"
+                  disabled={loading}
+                  className="flex-1 bg-gray-300 text-gray-700 p-2 rounded-lg disabled:opacity-50"
                 >
                   Cancel
                 </button>
                 <button
                   onClick={(e) => {
                     const input = e.target.parentElement.parentElement.querySelector('input');
-                    if (input.value.trim().length === 6) {
+                    if (input.value.trim().length === 6 && !loading) {
                       joinHousehold(input.value);
                     }
                   }}
-                  className="flex-1 bg-blue-500 text-white p-2 rounded-lg"
+                  disabled={loading}
+                  className="flex-1 bg-blue-500 text-white p-2 rounded-lg disabled:opacity-50"
                 >
-                  Join
+                  {loading ? 'Joining...' : 'Join'}
                 </button>
               </div>
             </div>
@@ -369,14 +459,14 @@ const BudgetTracker = () => {
     const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
 
     useEffect(() => {
-      if (description && currentHousehold) {
-        const suggested = suggestCategory(description, currentHousehold.id);
+      if (description) {
+        const suggested = suggestCategory(description);
         setCategory(suggested);
       }
     }, [description]);
 
     const handleSubmit = () => {
-      if (!amount || !description || !category) return;
+      if (!amount || !description || !category || loading) return;
       addExpense(amount, description, category, date, userName);
       setAmount('');
       setDescription('');
@@ -426,15 +516,17 @@ const BudgetTracker = () => {
             <div className="flex space-x-2">
               <button
                 onClick={() => setShowAddExpense(false)}
-                className="flex-1 bg-gray-300 text-gray-700 p-2 rounded-lg"
+                disabled={loading}
+                className="flex-1 bg-gray-300 text-gray-700 p-2 rounded-lg disabled:opacity-50"
               >
                 Cancel
               </button>
               <button
                 onClick={handleSubmit}
-                className="flex-1 bg-blue-500 text-white p-2 rounded-lg"
+                disabled={loading}
+                className="flex-1 bg-blue-500 text-white p-2 rounded-lg disabled:opacity-50"
               >
-                Add
+                {loading ? 'Adding...' : 'Add'}
               </button>
             </div>
           </div>
@@ -628,6 +720,18 @@ const BudgetTracker = () => {
     );
   };
 
+  // Show loading screen while initializing
+  if (loading && !currentHousehold) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="text-center">
+          <div className="text-lg font-semibold">Loading...</div>
+          <div className="text-gray-600">Setting up your household</div>
+        </div>
+      </div>
+    );
+  }
+
   // Main render
   if (!currentHousehold) {
     return <SetupScreen />;
@@ -640,12 +744,13 @@ const BudgetTracker = () => {
         <div>
           <h1 className="font-bold text-lg">{currentHousehold.name}</h1>
           <div className="text-sm text-gray-600">
-            {currentHousehold.members.length} member{currentHousehold.members.length !== 1 ? 's' : ''}
+            {currentHousehold.members?.length || 0} member{(currentHousehold.members?.length || 0) !== 1 ? 's' : ''}
           </div>
         </div>
         <button
           onClick={() => setShowAddExpense(true)}
-          className="bg-blue-500 text-white p-2 rounded-full hover:bg-blue-600 transition-colors"
+          disabled={loading}
+          className="bg-blue-500 text-white p-2 rounded-full hover:bg-blue-600 transition-colors disabled:opacity-50"
         >
           <Plus className="w-6 h-6" />
         </button>
