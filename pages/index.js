@@ -228,21 +228,6 @@ const addExpense = async (amount, description, category, date, user, currency = 
   }
 };
 
-  // Test Firebase connection
-  const handleTestFirebase = async () => {
-    try {
-      const isConnected = await testFirebaseConnection();
-      if (isConnected) {
-        alert('✅ Firebase connected successfully!');
-      } else {
-        alert('❌ Firebase connection failed. Check console for details.');
-      }
-    } catch (error) {
-      console.error('Test error:', error);
-      alert('❌ Error testing Firebase connection: ' + error.message);
-    }
-  };
-
   // Get expenses for current household (now from state, updated by real-time listener)
   const householdExpenses = useMemo(() => {
     return expenses.sort((a, b) => new Date(b.date) - new Date(a.date));
@@ -321,38 +306,76 @@ const addExpense = async (amount, description, category, date, user, currency = 
 
   // Components
 
-// Clean SetupScreen Component - replace the existing one in your pages/index.js
+// Clean SetupScreen Component using refs - eliminates all state sync issues
 
 const SetupScreen = () => {
-  // Use a ref to avoid re-renders affecting the input
   const nameInputRef = useRef(null);
-  const [localName, setLocalName] = useState(userName);
-  
-  // Only update userName when user stops interacting, not on every keystroke
-  const updateUserName = useCallback((value) => {
-    setUserName(value);
-  }, []);
+  const [householdName, setHouseholdName] = useState('');
+  const [inviteCode, setInviteCode] = useState('');
+  const [inputValue, setInputValue] = useState(userName); // Only for display
+  const [isNameValid, setIsNameValid] = useState(userName.trim().length > 0);
   
   const handleNameChange = useCallback((e) => {
     const value = e.target.value;
-    setLocalName(value);
-    // Don't update userName immediately to prevent re-renders
+    setInputValue(value);
+    setIsNameValid(value.trim().length > 0);
+    
+    // Save to localStorage immediately
+    if (value.trim()) {
+      localStorage.setItem('userName', value.trim());
+    }
   }, []);
   
-  // Update userName when user moves to buttons or form submission
-  const handleNameBlur = useCallback(() => {
-    updateUserName(localName);
-  }, [localName, updateUserName]);
+  const getCurrentName = useCallback(() => {
+    return nameInputRef.current?.value?.trim() || inputValue.trim();
+  }, [inputValue]);
   
   const handleCreateHousehold = useCallback(() => {
-    updateUserName(localName); // Ensure userName is updated
-    setShowCreateHousehold(true);
-  }, [localName, updateUserName]);
+    const currentName = getCurrentName();
+    if (currentName) {
+      // Update the global userName state with current input value
+      setUserName(currentName);
+      localStorage.setItem('userName', currentName);
+      setShowCreateHousehold(true);
+    }
+  }, [getCurrentName]);
   
   const handleJoinHousehold = useCallback(() => {
-    updateUserName(localName); // Ensure userName is updated
-    setShowJoinHousehold(true);
-  }, [localName, updateUserName]);
+    const currentName = getCurrentName();
+    if (currentName) {
+      // Update the global userName state with current input value
+      setUserName(currentName);
+      localStorage.setItem('userName', currentName);
+      setShowJoinHousehold(true);
+    }
+  }, [getCurrentName]);
+
+  // Handle create household submission
+  const handleCreateSubmit = () => {
+    if (householdName.trim() && !loading) {
+      createHousehold(householdName);
+      setHouseholdName('');
+    }
+  };
+
+  // Handle join household submission
+  const handleJoinSubmit = () => {
+    if (inviteCode.trim().length === 6 && !loading) {
+      joinHousehold(inviteCode);
+      setInviteCode('');
+    }
+  };
+
+  // Close modals and reset state
+  const handleCloseCreate = () => {
+    setShowCreateHousehold(false);
+    setHouseholdName('');
+  };
+
+  const handleCloseJoin = () => {
+    setShowJoinHousehold(false);
+    setInviteCode('');
+  };
   
   return (
     <div className="p-6 max-w-md mx-auto">
@@ -366,9 +389,8 @@ const SetupScreen = () => {
           ref={nameInputRef}
           type="text"
           placeholder="Enter your name"
-          value={localName}
+          value={inputValue}
           onChange={handleNameChange}
-          onBlur={handleNameBlur}
           className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
           autoComplete="name"
         />
@@ -377,7 +399,7 @@ const SetupScreen = () => {
       <div className="space-y-3">
         <button
           onClick={handleCreateHousehold}
-          disabled={loading}
+          disabled={loading || !isNameValid}
           className="w-full bg-blue-500 text-white p-3 rounded-lg font-medium hover:bg-blue-600 transition-colors disabled:opacity-50"
         >
           {loading ? 'Loading...' : 'Create New Household'}
@@ -385,7 +407,7 @@ const SetupScreen = () => {
         
         <button
           onClick={handleJoinHousehold}
-          disabled={loading}
+          disabled={loading || !isNameValid}
           className="w-full bg-gray-500 text-white p-3 rounded-lg font-medium hover:bg-gray-600 transition-colors disabled:opacity-50"
         >
           {loading ? 'Loading...' : 'Join Household'}
@@ -394,38 +416,35 @@ const SetupScreen = () => {
 
       {/* Create Household Modal */}
       {showCreateHousehold && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4">
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-lg p-6 w-full max-w-sm">
             <h2 className="text-lg font-bold mb-4">Create Household</h2>
             <input
               type="text"
               placeholder="Enter household name"
-              className="w-full p-3 border border-gray-300 rounded-lg mb-4"
+              value={householdName}
+              onChange={(e) => setHouseholdName(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key === 'Enter' && e.target.value.trim() && !loading) {
-                  createHousehold(e.target.value);
+                if (e.key === 'Enter') {
+                  handleCreateSubmit();
                 }
               }}
+              className="w-full p-3 border border-gray-300 rounded-lg mb-4 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
               autoFocus
               autoComplete="off"
             />
             <div className="flex space-x-2">
               <button
-                onClick={() => setShowCreateHousehold(false)}
+                onClick={handleCloseCreate}
                 disabled={loading}
-                className="flex-1 bg-gray-300 text-gray-700 p-2 rounded-lg disabled:opacity-50"
+                className="flex-1 bg-gray-300 text-gray-700 p-2 rounded-lg disabled:opacity-50 hover:bg-gray-400 transition-colors"
               >
                 Cancel
               </button>
               <button
-                onClick={(e) => {
-                  const input = e.target.parentElement.parentElement.querySelector('input');
-                  if (input.value.trim() && !loading) {
-                    createHousehold(input.value);
-                  }
-                }}
-                disabled={loading}
-                className="flex-1 bg-blue-500 text-white p-2 rounded-lg disabled:opacity-50"
+                onClick={handleCreateSubmit}
+                disabled={loading || !householdName.trim()}
+                className="flex-1 bg-blue-500 text-white p-2 rounded-lg disabled:opacity-50 hover:bg-blue-600 transition-colors"
               >
                 {loading ? 'Creating...' : 'Create'}
               </button>
@@ -436,39 +455,42 @@ const SetupScreen = () => {
 
       {/* Join Household Modal */}
       {showJoinHousehold && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4">
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-lg p-6 w-full max-w-sm">
             <h2 className="text-lg font-bold mb-4">Join Household</h2>
             <input
               type="text"
               placeholder="Enter 6-digit invite code"
-              maxLength="6"
-              className="w-full p-3 border border-gray-300 rounded-lg mb-4 text-center text-lg font-mono"
+              value={inviteCode}
+              onChange={(e) => {
+                const value = e.target.value.replace(/[^0-9]/g, '').slice(0, 6);
+                setInviteCode(value);
+              }}
               onKeyDown={(e) => {
-                if (e.key === 'Enter' && e.target.value.trim().length === 6 && !loading) {
-                  joinHousehold(e.target.value);
+                if (e.key === 'Enter') {
+                  handleJoinSubmit();
                 }
               }}
+              className="w-full p-3 border border-gray-300 rounded-lg mb-4 text-center text-lg font-mono focus:ring-2 focus:ring-blue-500 focus:border-transparent"
               autoFocus
               autoComplete="off"
+              maxLength="6"
             />
+            <div className="text-xs text-gray-500 text-center mb-4">
+              {inviteCode.length}/6 digits
+            </div>
             <div className="flex space-x-2">
               <button
-                onClick={() => setShowJoinHousehold(false)}
+                onClick={handleCloseJoin}
                 disabled={loading}
-                className="flex-1 bg-gray-300 text-gray-700 p-2 rounded-lg disabled:opacity-50"
+                className="flex-1 bg-gray-300 text-gray-700 p-2 rounded-lg disabled:opacity-50 hover:bg-gray-400 transition-colors"
               >
                 Cancel
               </button>
               <button
-                onClick={(e) => {
-                  const input = e.target.parentElement.parentElement.querySelector('input');
-                  if (input.value.trim().length === 6 && !loading) {
-                    joinHousehold(input.target.value);
-                  }
-                }}
-                disabled={loading}
-                className="flex-1 bg-blue-500 text-white p-2 rounded-lg disabled:opacity-50"
+                onClick={handleJoinSubmit}
+                disabled={loading || inviteCode.length !== 6}
+                className="flex-1 bg-blue-500 text-white p-2 rounded-lg disabled:opacity-50 hover:bg-blue-600 transition-colors"
               >
                 {loading ? 'Joining...' : 'Join'}
               </button>
